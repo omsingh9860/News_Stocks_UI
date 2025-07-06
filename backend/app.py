@@ -759,16 +759,7 @@ def get_moneycontrol_news():
             stocks_with_sentiment = extract_stock_names_with_sentiment(title + " " + (description or ""))
 
             # Add chart data for first 3 stocks
-            enhanced_item['charts'] = {}
-            if enhanced_item.get('stocks_with_sentiment'):
-                for stock in enhanced_item['stocks_with_sentiment'][:3]:
-                    try:
-                        chart_data = get_stock_data(stock['symbol'], '5d')
-                        if chart_data:
-                            enhanced_item['charts'][stock['symbol']] = chart_data
-                    except Exception as e:
-                        logger.error(f"Error fetching chart for {stock['symbol']}: {e}")
-            
+           
             news_items.append({
                 'title': title,
                 'link': full_link,
@@ -960,6 +951,86 @@ def extract_et_article_content(soup, url):
     
     except Exception as e:
         return jsonify({"error": f"Failed to extract MC article: {str(e)}"}), 500
+    
+def extract_mc_article_content(soup, url):
+    """Extract article content from MoneyControl with summary, author, publish date, and sentiment"""
+    try:
+        # Extract main article content from MoneyControl
+        content_selectors = [
+            ".article_body p",
+            ".content_wrapper p",
+            ".clearfix p",
+            "article p",
+            ".content p"
+        ]
+        
+        content = ""
+        for selector in content_selectors:
+            paragraphs = soup.select(selector)
+            if paragraphs:
+                content = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+                break
+        
+        # Fallback if content still empty
+        if not content:
+            content = soup.get_text(strip=True)
+
+        # Generate summary from content
+        summary = simple_summarize(content, max_sentences=3)
+
+        # Extract author
+        author = None
+        author_selectors = [
+            ".article_author",
+            ".author",
+            ".byline",
+            "[class*='author']"
+        ]
+        for selector in author_selectors:
+            tag = soup.select_one(selector)
+            if tag:
+                author = tag.get_text(strip=True).replace("By", "").strip()
+                break
+
+        # Extract publish date
+        published_at = None
+        date_selectors = [
+            ".article_schedule",
+            ".schedule",
+            "time",
+            "[class*='date']"
+        ]
+        for selector in date_selectors:
+            tag = soup.select_one(selector)
+            if tag:
+                published_at = tag.get_text(strip=True)
+                break
+
+        # Extract stock mentions + sentiment
+        all_text = content or soup.get_text()
+        stocks_with_sentiment = extract_stock_names_with_sentiment(all_text)
+        
+        # Analyze sentiment
+        article_sentiment = analyze_sentiment(content)
+
+        return jsonify({
+            "content": content,
+            "summary": summary,
+            "author": author,
+            "publishedAt": published_at,
+            "stocks": extract_stock_names(all_text),
+            "stocks_with_sentiment": stocks_with_sentiment,
+            "article_sentiment": {
+                "score": round(article_sentiment, 3),
+                "label": "positive" if article_sentiment > 0.1 else "negative" if article_sentiment < -0.1 else "neutral"
+            },
+            "source": "MoneyControl",
+            "url": url
+        })
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to extract MC article: {str(e)}"}), 500
+
 
 def get_mc_article_metadata(url):
     """Get MoneyControl article metadata"""
