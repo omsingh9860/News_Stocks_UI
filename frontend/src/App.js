@@ -460,6 +460,7 @@ const StockNewsApp = () => {
         </p>
       </footer>
     </div>
+    git 
   );
 };
 
