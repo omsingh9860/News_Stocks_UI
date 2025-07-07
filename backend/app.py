@@ -641,7 +641,10 @@ def get_news_with_tradingview_ideas():
                 'stocks_with_sentiment': news_item.get('stocks_with_sentiment', [])
             }
             # Generate article_id
-            enhanced_item['article_id'] = str(hash(news_item.get('title', '') + news_item.get('link', '')))
+            title = news_item.get('title') or ''
+            link = news_item.get('link') or ''
+            enhanced_item['article_id'] = str(hash(title + link))
+
             
             # Generate better summary if description exists
             if news_item.get('description'):
