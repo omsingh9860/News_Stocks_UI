@@ -351,6 +351,8 @@ def extract_stock_names(text):
 
 TRADINGVIEW_URL = "https://in.tradingview.com/markets/stocks-india/ideas/"
 
+from urllib.parse import urljoin
+
 def get_tradingview_ideas():
     """Get TradingView ideas for Indian stocks"""
     try:
@@ -362,7 +364,6 @@ def get_tradingview_ideas():
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Find all the stock ideas and conditions
         all_ideas = soup.find_all("a", class_="title-tkslJwxl line-clamp-tkslJwxl stretched-outline-tkslJwxl")
         all_conditions = soup.find_all("span", class_="visually-hidden-label-cbI7LT3N")
 
@@ -373,15 +374,18 @@ def get_tradingview_ideas():
                 idea_tag = all_ideas[i]
                 condition_tag = all_conditions[i]
 
-                idea_href = idea_tag.get("href", "")
+                idea_href = idea_tag.get("href")
+                if not idea_href:
+                    # Skip this idea if no href
+                    continue
+
                 full_link = urljoin("https://in.tradingview.com", idea_href)
-                stock_split = idea_href.split("/")
+                stock_split = idea_href.strip("/").split("/")
                 stock_symbol = stock_split[4] if len(stock_split) > 4 else "Unknown"
                 title = idea_tag.get_text(strip=True) or stock_symbol
 
                 condition_text = condition_tag.get_text(strip=True)
 
-                # ✅ Proper signal label & color mapping
                 if condition_text == "Long":
                     signal_label = "BUY"
                     signal_color = "green"
@@ -405,12 +409,12 @@ def get_tradingview_ideas():
                 print(f"[WARN] Skipped idea due to error: {e}")
                 continue
 
-
         return ideas_list[:50]
 
     except Exception as e:
         print(f"[ERROR] Failed to fetch TradingView ideas: {e}")
         return []
+
     
 
 @app.route("/api/health")

@@ -64,7 +64,7 @@ const App = () => {
   // Fetch functions
   const fetchIndices = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/indices/live');
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/indices/live`);
       if (!response.ok) throw new Error('Failed to fetch indices');
       const data = await response.json();
       
@@ -82,7 +82,7 @@ const App = () => {
   const fetchNewsAndIdeas = useCallback(async () => {
     try {
       // Try the combined endpoint first
-      const response = await fetch('http://localhost:5000/api/news-with-ideas');
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/news-with-ideas`);
       if (response.ok) {
         const data = await response.json();
         setNews(data.news || []);
@@ -113,7 +113,7 @@ const App = () => {
 
   const fetchNews = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/news/summary');
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/news/summary`);
       if (!response.ok) throw new Error('Failed to fetch news');
       const data = await response.json();
       setNews(data.news || []);
@@ -125,7 +125,7 @@ const App = () => {
 
   const fetchTradingIdeas = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/tradingview/ideas/enhanced');
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tradingview/ideas/enhanced`);
       if (!response.ok) throw new Error('Failed to fetch trading ideas');
       const data = await response.json();
       setTradingIdeas(prev => ({
@@ -138,17 +138,6 @@ const App = () => {
     }
   }, []);
 
-  const fetchBookmarks = useCallback(async () => {
-    try {
-      const response = await fetch('http://localhost:5000/api/bookmarks');
-      if (response.ok) {
-        const data = await response.json();
-        setBookmarks(data.bookmarks || []);
-      }
-    } catch (err) {
-      console.error('Error fetching bookmarks:', err);
-    }
-  }, []);
 
   // Initial data fetch
   useEffect(() => {
@@ -158,7 +147,6 @@ const App = () => {
         await Promise.all([
           fetchIndices(),
           fetchNewsAndIdeas(),
-          fetchBookmarks()
         ]);
         setLastUpdated(new Date());
       } catch (err) {
@@ -169,7 +157,7 @@ const App = () => {
     };
 
     initializeData();
-  }, [fetchIndices, fetchNewsAndIdeas, fetchBookmarks]);
+  }, [fetchIndices, fetchNewsAndIdeas]);
 
   // Auto-refresh functionality
   useEffect(() => {
@@ -188,7 +176,7 @@ const App = () => {
       await Promise.all([
         fetchIndices(),
         fetchNewsAndIdeas(),
-        fetchBookmarks()
+        
       ]);
       setLastUpdated(new Date());
       addNotification('Data refreshed successfully', 'success');
@@ -219,36 +207,6 @@ const App = () => {
       ...prev,
       [articleId]: !prev[articleId]
     }));
-  };
-
-  const toggleBookmark = async (articleId, articleData) => {
-    try {
-      const isBookmarked = bookmarks.some(b => b.article_id === articleId);
-      const response = await fetch('http://localhost:5000/api/bookmarks', {
-        method: isBookmarked ? 'DELETE' : 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          article_id: articleId,
-          title: articleData.title,
-          url: articleData.link,
-          source: articleData.source,
-          sentiment: articleData.sentiment?.label || 'neutral'
-        })
-      });
-      
-      if (response.ok) {
-        await fetchBookmarks();
-        addNotification(
-          isBookmarked ? 'Bookmark removed' : 'Article bookmarked',
-          'success'
-        );
-      }
-    } catch (err) {
-      console.error('Error toggling bookmark:', err);
-      addNotification('Failed to update bookmark', 'error');
-    }
   };
 
   const getSentimentColor = (sentiment) => {
@@ -478,12 +436,7 @@ const App = () => {
                           <span>{article.publishedAt}</span>
                         </div>
                       )}
-                      <button
-                        onClick={() => toggleBookmark(articleId, article)}
-                        className={`bookmark-btn ${isBookmarked ? 'bookmarked' : ''}`}
-                      >
-                        {isBookmarked ? <BookmarkX size={16} /> : <Bookmark size={16} />}
-                      </button>
+                      
                     </div>
                   </div>
 
