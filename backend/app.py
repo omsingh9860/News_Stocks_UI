@@ -5,13 +5,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from datetime import datetime, timedelta
 import pytz
-from lxml import html
 from urllib.parse import urljoin
-import json
-import os
-import sqlite3
 import logging
-from functools import lru_cache
 from functools import wraps
 import time
 import re
@@ -21,12 +16,9 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from apscheduler.schedulers.background import BackgroundScheduler
-import pandas as pd
 import threading
 from collections import Counter
 import heapq
-import sys
-import io
 
 
 # Configure logging
