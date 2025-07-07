@@ -8,4 +8,3 @@ nltk==3.8.1
 textblob==0.17.1
 gunicorn==21.2.0
 apscheduler==3.10.4
-pandas==2.1.3
