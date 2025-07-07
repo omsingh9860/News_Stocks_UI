@@ -9,7 +9,6 @@ from lxml import html
 from urllib.parse import urljoin
 import json
 import os
-import yfinance as yf
 import sqlite3
 import logging
 from functools import lru_cache
@@ -21,10 +20,15 @@ import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from apscheduler.schedulers.background import BackgroundScheduler
+import pandas as pd
+import threading
 from collections import Counter
 import heapq
 import sys
 import io
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -49,26 +53,12 @@ ET_NEWS_URL = f"{ET_BASE_URL}/markets/stocks/news"
 TRADINGVIEW_URL = "https://in.tradingview.com/markets/stocks-india/ideas/"
 CACHE_DURATION = 300  # 5 minutes
 
-# Database initialization
-def init_db():
-    conn = sqlite3.connect('bookmarks.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS bookmarks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            article_id TEXT UNIQUE,
-            title TEXT,
-            url TEXT,
-            source TEXT,
-            sentiment TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+LIVE_DATA_CACHE_DURATION = 60
 
-# Initialize database on startup
-init_db()
+
+live_index_data = {}
+data_lock = threading.Lock()
+
 
 # Enhanced stock list with more Indian companies
 INDIAN_STOCKS = [
@@ -129,6 +119,31 @@ NEGATIVE_KEYWORDS = [
 # Simple in-memory cache (no Redis dependency)
 cache = {}
 rate_limit_store = {}
+
+
+def get_market_status(timezone_str):
+    """Get market status based on timezone"""
+    try:
+        tz = pytz.timezone(timezone_str)
+        local_time = datetime.now(tz)
+        current_hour = local_time.hour
+        current_minute = local_time.minute
+        weekday = local_time.weekday()
+        
+        # Weekend check
+        if weekday >= 5:  
+            return "closed"
+        
+        
+        if timezone_str == 'Asia/Kolkata':  # NSE
+            if 9 <= current_hour < 15 or (current_hour == 15 and current_minute <= 30):
+                return "open"
+        
+        return "closed"
+    
+    except Exception as e:
+        logger.error(f"Error getting market status: {e}")
+        return "unknown"
 
 def cache_response(timeout=CACHE_DURATION):
     """Simple in-memory cache decorator"""
@@ -408,13 +423,24 @@ def get_tradingview_ideas():
 
 @app.route("/api/health")
 def health_check():
-    """Health check endpoint"""
+    """Enhanced health check endpoint"""
+    global live_index_data
+    
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "cache_available": True,
-        "sources": ["MoneyControl", "Economic Times", "TradingView"],
-        "features": ["summarization", "sentiment_analysis", "stock_extraction", "tradingview_ideas"]
+        "live_indices_loaded": len(live_index_data),
+        "sources": ["MoneyControl", "Economic Times", "TradingView", "Yahoo Finance"],
+        "features": [
+            "summarization", 
+            "sentiment_analysis", 
+            "stock_extraction", 
+            "tradingview_ideas",
+            "live_index_data",
+            "historical_data",
+            "market_comparison"
+        ]
     })
 
 @app.route("/api/tradingview/ideas")
@@ -431,6 +457,139 @@ def get_tradingview_ideas_api():
             "last_updated": datetime.now().isoformat()
         })
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
+@app.route("/api/indices/live")
+@rate_limit(max_requests=120, window=60)  # Higher limit for live data
+def get_live_indices():
+    """Get live data for all major indices"""
+    global live_index_data
+    
+    try:
+        with data_lock:
+            if not live_index_data:
+                # If no cached data, fetch immediately
+                update_all_indices()
+            
+            # Check if data is stale (older than 2 minutes)
+            current_time = datetime.now()
+            for index_key, data in live_index_data.items():
+                if data and 'last_updated' in data:
+                    last_updated = datetime.fromisoformat(data['last_updated'].replace('Z', '+00:00'))
+                    if (current_time - last_updated.replace(tzinfo=None)).seconds > 120:
+                        # Data is stale, trigger update in background
+                        threading.Thread(target=update_all_indices).start()
+                        break
+        
+        return jsonify({
+            "indices": live_index_data,
+            "total_count": len(live_index_data),
+            "last_updated": datetime.now().isoformat(),
+            "cache_duration": f"{LIVE_DATA_CACHE_DURATION} seconds"
+        })
+    
+    except Exception as e:
+        logger.error(f"Error in get_live_indices: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/indices/comparison")
+@rate_limit(max_requests=30, window=60)
+def get_indices_comparison():
+    """Get comparison data for all major indices"""
+    try:
+        global live_index_data
+        
+        with data_lock:
+            if not live_index_data:
+                update_all_indices()
+        
+        comparison_data = []
+        for index_key, data in live_index_data.items():
+            if data:
+                comparison_data.append({
+                    'index': index_key,
+                    'name': data['name'],
+                    'current_price': data['current_price'],
+                    'change': data['change'],
+                    'change_percent': data['change_percent'],
+                    'market_status': data['market_status'],
+                    'currency': data['currency']
+                })
+        
+        # Sort by change percentage (descending)
+        comparison_data.sort(key=lambda x: x['change_percent'], reverse=True)
+        
+        return jsonify({
+            "comparison": comparison_data,
+            "best_performer": comparison_data[0] if comparison_data else None,
+            "worst_performer": comparison_data[-1] if comparison_data else None,
+            "last_updated": datetime.now().isoformat()
+        })
+    
+    except Exception as e:
+        logger.error(f"Error in indices comparison: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/indices/summary")
+@rate_limit(max_requests=60, window=60)
+def get_market_summary():
+    """Get overall market summary"""
+    try:
+        global live_index_data
+        
+        with data_lock:
+            if not live_index_data:
+                update_all_indices()
+        
+        summary = {
+            "total_indices": len(live_index_data),
+            "indices_up": 0,
+            "indices_down": 0,
+            "indices_unchanged": 0,
+            "markets_open": 0,
+            "markets_closed": 0,
+            "average_change": 0,
+            "indices_data": []
+        }
+        
+        total_change = 0
+        for index_key, data in live_index_data.items():
+            if data:
+                change_percent = data['change_percent']
+                
+                if change_percent > 0:
+                    summary["indices_up"] += 1
+                elif change_percent < 0:
+                    summary["indices_down"] += 1
+                else:
+                    summary["indices_unchanged"] += 1
+                
+                if data['market_status'] == 'open':
+                    summary["markets_open"] += 1
+                else:
+                    summary["markets_closed"] += 1
+                
+                total_change += change_percent
+                
+                summary["indices_data"].append({
+                    'index': index_key,
+                    'name': data['name'],
+                    'change_percent': change_percent,
+                    'market_status': data['market_status']
+                })
+        
+        if live_index_data:
+            summary["average_change"] = round(total_change / len(live_index_data), 2)
+        
+        summary["market_sentiment"] = "positive" if summary["average_change"] > 0 else "negative" if summary["average_change"] < 0 else "neutral"
+        summary["last_updated"] = datetime.now().isoformat()
+        
+        return jsonify(summary)
+    
+    except Exception as e:
+        logger.error(f"Error in market summary: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/tradingview/ideas/by-condition")
@@ -520,6 +679,73 @@ def get_news_with_tradingview_ideas():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+def fetch_indices_from_moneycontrol():
+    results = {}
+
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/90.0.4430.93 Safari/537.36"
+        )
+    }
+
+    try:
+        url = "https://www.moneycontrol.com/stocksmarketsindia/"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+
+        # Row 1 - Nifty 50
+        tr_nifty = soup.select_one("#maindindi > div:nth-of-type(1) table tbody tr:nth-of-type(1)")
+        cells = tr_nifty.find_all("td")
+        results["NIFTY50"] = {
+            "name": cells[0].get_text(strip=True),
+            "current_price": float(cells[1].get_text(strip=True).replace(",", "")),
+            "change": float(cells[2].get_text(strip=True).replace(",", "")),
+            "change_percent": float(cells[3].get_text(strip=True).replace("%", "")),
+            "last_updated": datetime.now().isoformat(),
+            "market_status": "open",
+            "currency": "INR"
+        }
+
+        # Row 2 - Sensex
+        tr_sensex = soup.select_one("#maindindi > div:nth-of-type(1) table tbody tr:nth-of-type(2)")
+        cells = tr_sensex.find_all("td")
+        results["SENSEX"] = {
+            "name": cells[0].get_text(strip=True),
+            "current_price": float(cells[1].get_text(strip=True).replace(",", "")),
+            "change": float(cells[2].get_text(strip=True).replace(",", "")),
+            "change_percent": float(cells[3].get_text(strip=True).replace("%", "")),
+            "last_updated": datetime.now().isoformat(),
+            "market_status": "open",
+            "currency": "INR"
+        }
+
+        # Row 3 - Bank Nifty
+        tr_banknifty = soup.select_one("#maindindi > div:nth-of-type(1) table tbody tr:nth-of-type(3)")
+        cells = tr_banknifty.find_all("td")
+        results["BANKNIFTY"] = {
+            "name": cells[0].get_text(strip=True),
+            "current_price": float(cells[1].get_text(strip=True).replace(",", "")),
+            "change": float(cells[2].get_text(strip=True).replace(",", "")),
+            "change_percent": float(cells[3].get_text(strip=True).replace("%", "")),
+            "last_updated": datetime.now().isoformat(),
+            "market_status": "open",
+            "currency": "INR"
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching indices: {e}")
+        results["NIFTY50"] = None
+        results["SENSEX"] = None
+        results["BANKNIFTY"] = None
+
+    return results
+
+
+
 
 def get_enhanced_tradingview_ideas():
     """Get TradingView ideas with enhanced signal labeling"""
@@ -1272,275 +1498,57 @@ def get_trending_stocks():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
-@app.route("/api/bookmarks", methods=['GET'])
-@rate_limit(max_requests=30, window=60)
-def get_bookmarks():
-    """Get all bookmarked articles"""
+
+def update_all_indices():
+    """Fetch fresh data for Nifty, Dow Jones, and Hang Seng"""
+    global live_index_data
+
     try:
-        conn = sqlite3.connect('bookmarks.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT article_id, title, url, source, sentiment, created_at 
-            FROM bookmarks 
-            ORDER BY created_at DESC
-        ''')
-        bookmarks = cursor.fetchall()
-        conn.close()
+        logger.info("Updating indices data from MoneyControl...")
+        new_data = fetch_indices_from_moneycontrol()
+        with data_lock:
+            live_index_data = new_data
+        logger.info("Indices updated successfully")
+    except Exception as e:
+        logger.error(f"Error updating indices: {e}")
+
+
+
+
+    
+scheduler = BackgroundScheduler()
+
+def start_background_tasks():
+    """Start background tasks for live data updates"""
+    try:
+        # Initial data fetch
+        update_all_indices()
         
-        # Convert to list of dictionaries
-        bookmark_list = []
-        for bookmark in bookmarks:
-            bookmark_list.append({
-                'article_id': bookmark[0],
-                'title': bookmark[1],
-                'url': bookmark[2],
-                'source': bookmark[3],
-                'sentiment': bookmark[4],
-                'created_at': bookmark[5]
-            })
+        # Schedule regular updates every 60 seconds
+        scheduler.add_job(
+            func=update_all_indices,
+            trigger="interval",
+            minutes=60,
+            id='update_indices',
+            name='Update live indices data',
+            replace_existing=True
+        )
         
-        return jsonify({
-            "bookmarks": bookmark_list,
-            "total_count": len(bookmark_list),
-            "last_updated": datetime.now().isoformat()
-        })
+        scheduler.start()
+        logger.info("Background scheduler started for live data updates")
     
     except Exception as e:
-        logger.error(f"Error fetching bookmarks: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error starting background tasks: {e}")
 
-
-@app.route("/api/bookmarks", methods=['POST'])
-@rate_limit(max_requests=30, window=60)
-def add_bookmark():
-    """Add a new bookmark"""
-    try:
-        data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['article_id', 'title', 'url', 'source']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
-        
-        # Extract sentiment if provided
-        sentiment = data.get('sentiment', 'neutral')
-        
-        conn = sqlite3.connect('bookmarks.db')
-        cursor = conn.cursor()
-        
-        # Check if bookmark already exists
-        cursor.execute('SELECT id FROM bookmarks WHERE article_id = ?', (data['article_id'],))
-        existing = cursor.fetchone()
-        
-        if existing:
-            conn.close()
-            return jsonify({"error": "Article already bookmarked"}), 409
-        
-        # Insert new bookmark
-        cursor.execute('''
-            INSERT INTO bookmarks (article_id, title, url, source, sentiment)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (data['article_id'], data['title'], data['url'], data['source'], sentiment))
-        
-        conn.commit()
-        bookmark_id = cursor.lastrowid
-        conn.close()
-        
-        return jsonify({
-            "message": "Bookmark added successfully",
-            "bookmark_id": bookmark_id,
-            "article_id": data['article_id']
-        }), 201
-    
-    except Exception as e:
-        logger.error(f"Error adding bookmark: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/bookmarks/<article_id>", methods=['DELETE'])
-@rate_limit(max_requests=30, window=60)
-def delete_bookmark(article_id):
-    """Delete a bookmark by article_id"""
-    try:
-        conn = sqlite3.connect('bookmarks.db')
-        cursor = conn.cursor()
-        
-        # Check if bookmark exists
-        cursor.execute('SELECT id FROM bookmarks WHERE article_id = ?', (article_id,))
-        existing = cursor.fetchone()
-        
-        if not existing:
-            conn.close()
-            return jsonify({"error": "Bookmark not found"}), 404
-        
-        # Delete the bookmark
-        cursor.execute('DELETE FROM bookmarks WHERE article_id = ?', (article_id,))
-        conn.commit()
-        conn.close()
-        
-        return jsonify({
-            "message": "Bookmark deleted successfully",
-            "article_id": article_id
-        })
-    
-    except Exception as e:
-        logger.error(f"Error deleting bookmark: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-
-def get_stock_symbol_for_yahoo(symbol):
-    """Convert Indian stock symbol to Yahoo Finance format"""
-    special_cases = {
-        'M&M': 'M&M.NS',
-        'BAJAJ-AUTO': 'BAJAJ-AUTO.NS',
-        'NIFTY': '^NSEI',
-        'SENSEX': '^BSESN'
-    }
-    
-    if symbol in special_cases:
-        return special_cases[symbol]
-    
-    # For regular Indian stocks, append .NS (National Stock Exchange)
-    return f"{symbol}.NS"
-
-@lru_cache(maxsize=100)
-def fetch_stock_data_cached(symbol, period, timestamp):
-    """Cached stock data fetching"""
-    try:
-        yahoo_symbol = get_stock_symbol_for_yahoo(symbol)
-        ticker = yf.Ticker(yahoo_symbol)
-        
-        # Get historical data
-        hist = ticker.history(period=period)
-        
-        if hist.empty:
-            return None
-        
-        # Convert to list of dictionaries for JSON serialization
-        data = []
-        for date, row in hist.iterrows():
-            data.append({
-                'date': date.strftime('%Y-%m-%d'),
-                'timestamp': int(date.timestamp()),
-                'open': round(float(row['Open']), 2),
-                'high': round(float(row['High']), 2),
-                'low': round(float(row['Low']), 2),
-                'close': round(float(row['Close']), 2),
-                'volume': int(row['Volume'])
-            })
-        
-        # Get current price info
-        info = ticker.info
-        current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
-        previous_close = info.get('previousClose', info.get('regularMarketPreviousClose', 0))
-        
-        # Calculate change
-        change = current_price - previous_close if current_price and previous_close else 0
-        change_percent = (change / previous_close * 100) if previous_close else 0
-        
-        return {
-            'symbol': symbol,
-            'current_price': round(current_price, 2),
-            'previous_close': round(previous_close, 2),
-            'change': round(change, 2),
-            'change_percent': round(change_percent, 2),
-            'historical_data': data,
-            'last_updated': datetime.now().isoformat()
-        }
-    
-    except Exception as e:
-        logger.error(f"Error fetching stock data for {symbol}: {e}")
-        return None
-
-def get_stock_data(symbol, period='1mo'):
-    """Get stock data with 5-minute caching"""
-    try:
-        # Create timestamp for 5-minute cache invalidation
-        current_time = datetime.now()
-        cache_timestamp = current_time.replace(second=0, microsecond=0)
-        # Round to nearest 5 minutes
-        cache_timestamp = cache_timestamp.replace(minute=(cache_timestamp.minute // 5) * 5)
-        
-        # Use cached function
-        return fetch_stock_data_cached(symbol, period, cache_timestamp.timestamp())
-    
-    except Exception as e:
-        logger.error(f"Error in get_stock_data for {symbol}: {e}")
-        return None
-
-@app.route("/api/chart/<symbol>")
-@rate_limit(max_requests=60, window=60)
-def get_chart_data(symbol):
-    """Get chart data for a specific stock (default 1 month period)"""
-    try:
-        stock_data = get_stock_data(symbol.upper(), '1mo')
-        
-        if not stock_data:
-            return jsonify({"error": f"No data found for symbol: {symbol}"}), 404
-        
-        return jsonify({
-            "chart_data": stock_data,
-            "symbol": symbol.upper(),
-            "period": "1mo",
-            "data_points": len(stock_data.get('historical_data', [])),
-            "last_updated": stock_data.get('last_updated')
-        })
-    
-    except Exception as e:
-        logger.error(f"Error fetching chart data for {symbol}: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/chart/<symbol>/<period>")
-@rate_limit(max_requests=60, window=60)
-def get_chart_data_with_period(symbol, period):
-    """Get chart data for a specific stock with custom period"""
-    try:
-        # Validate period
-        valid_periods = ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
-        if period not in valid_periods:
-            return jsonify({
-                "error": f"Invalid period: {period}. Valid periods are: {', '.join(valid_periods)}"
-            }), 400
-        
-        stock_data = get_stock_data(symbol.upper(), period)
-        
-        if not stock_data:
-            return jsonify({"error": f"No data found for symbol: {symbol}"}), 404
-        
-        # Calculate additional metrics based on period
-        historical_data = stock_data.get('historical_data', [])
-        analytics = {}
-        
-        if len(historical_data) >= 2:
-            # Calculate period high/low
-            highs = [data['high'] for data in historical_data]
-            lows = [data['low'] for data in historical_data]
-            
-            analytics = {
-                'period_high': max(highs) if highs else 0,
-                'period_low': min(lows) if lows else 0,
-                'period_volume_avg': sum(data['volume'] for data in historical_data) / len(historical_data),
-                'volatility': round(
-                    sum(abs(historical_data[i]['close'] - historical_data[i-1]['close']) 
-                        for i in range(1, len(historical_data))) / len(historical_data), 2
-                )
-            }
-        
-        return jsonify({
-            "chart_data": stock_data,
-            "symbol": symbol.upper(),
-            "period": period,
-            "data_points": len(historical_data),
-            "analytics": analytics,
-            "last_updated": stock_data.get('last_updated')
-        })
-    
-    except Exception as e:
-        logger.error(f"Error fetching chart data for {symbol} with period {period}: {e}")
-        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    # Start background tasks
+    start_background_tasks()
+    
+    try:
+        app.run(debug=True, host="0.0.0.0", port=5000)
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+        if scheduler.running:
+            scheduler.shutdown()
+        logger.info("Scheduler stopped")
