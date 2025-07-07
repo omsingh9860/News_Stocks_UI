@@ -1540,10 +1540,11 @@ def start_background_tasks():
     except Exception as e:
         logger.error(f"Error starting background tasks: {e}")
 
+# Start background tasks
+start_background_tasks()
 
 if __name__ == "__main__":
-    # Start background tasks
-    start_background_tasks()
+    
     
     try:
         app.run(debug=True, host="0.0.0.0", port=5000)
