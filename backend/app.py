@@ -5,8 +5,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from datetime import datetime, timedelta
 import pytz
+from lxml import html
 from urllib.parse import urljoin
+import json
+import os
+import sqlite3
 import logging
+from functools import lru_cache
 from functools import wraps
 import time
 import re
@@ -16,9 +21,12 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from apscheduler.schedulers.background import BackgroundScheduler
+import pandas as pd
 import threading
 from collections import Counter
 import heapq
+import sys
+import io
 
 
 # Configure logging
@@ -351,8 +359,6 @@ def extract_stock_names(text):
 
 TRADINGVIEW_URL = "https://in.tradingview.com/markets/stocks-india/ideas/"
 
-from urllib.parse import urljoin
-
 def get_tradingview_ideas():
     """Get TradingView ideas for Indian stocks"""
     try:
@@ -364,6 +370,7 @@ def get_tradingview_ideas():
 
         soup = BeautifulSoup(response.text, "html.parser")
 
+        # Find all the stock ideas and conditions
         all_ideas = soup.find_all("a", class_="title-tkslJwxl line-clamp-tkslJwxl stretched-outline-tkslJwxl")
         all_conditions = soup.find_all("span", class_="visually-hidden-label-cbI7LT3N")
 
@@ -374,18 +381,15 @@ def get_tradingview_ideas():
                 idea_tag = all_ideas[i]
                 condition_tag = all_conditions[i]
 
-                idea_href = idea_tag.get("href")
-                if not idea_href:
-                    # Skip this idea if no href
-                    continue
-
+                idea_href = idea_tag.get("href", "")
                 full_link = urljoin("https://in.tradingview.com", idea_href)
-                stock_split = idea_href.strip("/").split("/")
+                stock_split = idea_href.split("/")
                 stock_symbol = stock_split[4] if len(stock_split) > 4 else "Unknown"
                 title = idea_tag.get_text(strip=True) or stock_symbol
 
                 condition_text = condition_tag.get_text(strip=True)
 
+                # Γ£à Proper signal label & color mapping
                 if condition_text == "Long":
                     signal_label = "BUY"
                     signal_color = "green"
@@ -409,12 +413,12 @@ def get_tradingview_ideas():
                 print(f"[WARN] Skipped idea due to error: {e}")
                 continue
 
+
         return ideas_list[:50]
 
     except Exception as e:
         print(f"[ERROR] Failed to fetch TradingView ideas: {e}")
         return []
-
     
 
 @app.route("/api/health")
@@ -615,9 +619,7 @@ def get_ideas_by_condition():
 @app.route("/api/news-with-ideas")
 @rate_limit(max_requests=30, window=60)
 @cache_response(timeout=300)  # Cache for 5 minutes
-
-
-def get_news_with_tradingview_ideas():
+def get_news_with_tradingview_ideas():  # This function name should match the route
     """Get news with summaries and TradingView trading ideas combined"""
     try:
         # Get news from both sources
@@ -641,10 +643,7 @@ def get_news_with_tradingview_ideas():
                 'stocks_with_sentiment': news_item.get('stocks_with_sentiment', [])
             }
             # Generate article_id
-            title = news_item.get('title') or ''
-            link = news_item.get('link') or ''
-            enhanced_item['article_id'] = str(hash(title + link))
-
+            enhanced_item['article_id'] = str(hash(news_item.get('title', '') + news_item.get('link', '')))
             
             # Generate better summary if description exists
             if news_item.get('description'):
@@ -652,8 +651,11 @@ def get_news_with_tradingview_ideas():
             else:
                 enhanced_item['summary'] = "Summary not available"
             
-            # Add overall sentiment
-            full_text = (news_item.get('title', '') + " " + news_item.get('description', ''))
+            # Add overall sentiment - FIX THE NONE CONCATENATION ERROR
+            title = news_item.get('title') or ""
+            description = news_item.get('description') or ""
+            full_text = title + " " + description
+            
             sentiment_score = analyze_sentiment(full_text)
             enhanced_item['sentiment'] = {
                 'score': round(sentiment_score, 3),
@@ -677,6 +679,7 @@ def get_news_with_tradingview_ideas():
         })
     
     except Exception as e:
+        print(f"Error in get_news_with_tradingview_ideas: {e}")
         return jsonify({"error": str(e)}), 500
     
 def fetch_indices_from_moneycontrol():
@@ -694,9 +697,6 @@ def fetch_indices_from_moneycontrol():
         url = "https://www.moneycontrol.com/stocksmarketsindia/"
         r = requests.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
-        print("===== RAW HTML START =====")
-        print(r.text)
-        print("===== RAW HTML END =====")
         soup = BeautifulSoup(r.text, "lxml")
 
         # Row 1 - Nifty 50
@@ -745,47 +745,54 @@ def fetch_indices_from_moneycontrol():
         results["BANKNIFTY"] = None
 
     return results
-        
+
+
+
+
 def get_enhanced_tradingview_ideas():
     """Get TradingView ideas with enhanced signal labeling"""
     try:
+        # Set up UTF-8 encoding
+        # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        
         response = requests.get(TRADINGVIEW_URL, timeout=15)
         response.encoding = 'utf-8'
-
+        
         if response.status_code != 200:
             return []
-
+        
         soup = BeautifulSoup(response.text, "html.parser")
-
+        
         # Find all the stock ideas
         all_ideas = soup.find_all(class_="title-tkslJwxl line-clamp-tkslJwxl stretched-outline-tkslJwxl")
-
+        
         # Find all the conditions (long, short, educational, etc.)
         all_conditions = soup.find_all(class_="visually-hidden-label-cbI7LT3N", name="span")
-
+        
+        # Initialize lists
         ideas_list = []
-
+        
+        # Extract stock names and links
         for idea in all_ideas:
             try:
                 idea_href = idea.get("href")
-                if not idea_href:
-                    continue  # Skip if href is missing
-
-                full_link = urljoin("https://in.tradingview.com", idea_href)
-                stock_split = idea_href.strip("/").split("/")
-                stock_symbol = stock_split[4] if len(stock_split) > 4 else "Unknown"
-                title = idea.get_text(strip=True) or stock_symbol
-
-                ideas_list.append({
-                    "stock_symbol": stock_symbol,
-                    "title": title,
-                    "link": full_link,
-                    "condition": "Educational"
-                })
+                if idea_href:
+                    stock_split = idea_href.split("/")
+                    if len(stock_split) >= 5:
+                        stock_symbol = stock_split[4]
+                        full_link = "" + idea_href
+                        title = idea.get_text(strip=True) or stock_symbol
+                        
+                        ideas_list.append({
+                            'stock_symbol': stock_symbol,
+                            'title': title,
+                            'link': full_link,
+                            'condition': 'Educational'  # Default condition
+                        })
             except Exception as e:
                 print(f"Error processing idea: {e}")
                 continue
-
+        
         # Extract conditions
         conditions = []
         for span in all_conditions:
@@ -800,28 +807,29 @@ def get_enhanced_tradingview_ideas():
             except Exception as e:
                 print(f"Error processing condition: {e}")
                 conditions.append("Educational")
-
+        
         # Match conditions with ideas and add signal labeling
         enhanced_ideas = []
         for i, idea in enumerate(ideas_list):
             if i < len(conditions):
-                idea["condition"] = conditions[i]
-
-            condition = idea["condition"]
+                idea['condition'] = conditions[i]
+            
+            # Add signal labeling based on condition
+            condition = idea['condition']
             if condition == "Long":
-                idea["signal_label"] = "BUY"
-                idea["signal_color"] = "green"
+                idea['signal_label'] = "BUY"
+                idea['signal_color'] = "green"
             elif condition == "Short":
-                idea["signal_label"] = "SELL"
-                idea["signal_color"] = "red"
-            else:
-                idea["signal_label"] = "EDUCATIONAL"
-                idea["signal_color"] = "blue"
-
+                idea['signal_label'] = "SELL"
+                idea['signal_color'] = "red"
+            else:  # Educational
+                idea['signal_label'] = "EDUCATIONAL"
+                idea['signal_color'] = "blue"
+            
             enhanced_ideas.append(idea)
-
-        return enhanced_ideas[:30]
-
+        
+        return enhanced_ideas[:30]  # Return top 30 ideas
+    
     except Exception as e:
         print(f"Error fetching TradingView ideas: {e}")
         return []
@@ -1534,11 +1542,10 @@ def start_background_tasks():
     except Exception as e:
         logger.error(f"Error starting background tasks: {e}")
 
-# Start background tasks
-start_background_tasks()
 
 if __name__ == "__main__":
-    
+    # Start background tasks
+    start_background_tasks()
     
     try:
         app.run(debug=True, host="0.0.0.0", port=5000)
