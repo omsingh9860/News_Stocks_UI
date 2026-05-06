@@ -104,7 +104,7 @@ def get_live_indices():
                     last_updated = datetime.fromisoformat(
                         data['last_updated'].replace('Z', '+00:00')
                     )
-                    if (current_time - last_updated.replace(tzinfo=None)).seconds > 120:
+                    if (current_time - last_updated.replace(tzinfo=None)).total_seconds() > 120:
                         threading.Thread(target=update_all_indices).start()
                         break
 

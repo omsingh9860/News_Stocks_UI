@@ -1,6 +1,7 @@
 """
 In-memory cache, rate limiting, and safe-API-call decorators.
 """
+import hashlib
 import time
 import logging
 from functools import wraps
@@ -16,12 +17,21 @@ cache = {}
 rate_limit_store = {}
 
 
+def _stable_hash(value: str) -> str:
+    """Return a stable MD5 hex digest for cache key generation.
+
+    Python's built-in hash() is randomised per process (PYTHONHASHSEED),
+    so it must not be used for persistent or cross-call cache keys.
+    """
+    return hashlib.md5(value.encode(), usedforsecurity=False).hexdigest()
+
+
 def cache_response(timeout=CACHE_DURATION):
     """Simple in-memory cache decorator."""
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            cache_key = f"api:{f.__name__}:{hash(str(args) + str(kwargs))}"
+            cache_key = f"api:{f.__name__}:{_stable_hash(str(args) + str(kwargs))}"
             current_time = time.time()
 
             if cache_key in cache:

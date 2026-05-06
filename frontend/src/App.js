@@ -190,7 +190,8 @@ const App = () => {
   };
 
   // Utility functions
-  const addNotification = (message, type = 'info') => {    const notification = {
+  const addNotification = (message, type = 'info') => {
+    const notification = {
       id: Date.now(),
       message,
       type,
