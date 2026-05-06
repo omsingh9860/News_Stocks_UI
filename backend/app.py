@@ -1543,6 +1543,213 @@ def start_background_tasks():
         logger.error(f"Error starting background tasks: {e}")
 
 
+
+# ============================================================
+# PHASE 1 — NEW ENDPOINTS (SaaS Transformation)
+# ============================================================
+
+# Extended stock list: NSE blue-chips + select US indices/stocks
+US_STOCKS = [
+    {'name': 'S&P 500 Index', 'symbol': 'SPX', 'exchange': 'US'},
+    {'name': 'Dow Jones Industrial Average', 'symbol': 'DJI', 'exchange': 'US'},
+    {'name': 'NASDAQ Composite', 'symbol': 'IXIC', 'exchange': 'US'},
+    {'name': 'Apple Inc.', 'symbol': 'AAPL', 'exchange': 'NASDAQ'},
+    {'name': 'Microsoft Corporation', 'symbol': 'MSFT', 'exchange': 'NASDAQ'},
+    {'name': 'Alphabet Inc.', 'symbol': 'GOOGL', 'exchange': 'NASDAQ'},
+    {'name': 'Amazon.com Inc.', 'symbol': 'AMZN', 'exchange': 'NASDAQ'},
+    {'name': 'Tesla Inc.', 'symbol': 'TSLA', 'exchange': 'NASDAQ'},
+    {'name': 'NVIDIA Corporation', 'symbol': 'NVDA', 'exchange': 'NASDAQ'},
+    {'name': 'Meta Platforms Inc.', 'symbol': 'META', 'exchange': 'NASDAQ'},
+]
+
+NSE_STOCKS_LIST = [
+    {'name': s['name'], 'symbol': s['symbol'], 'exchange': 'NSE'}
+    for s in INDIAN_STOCKS
+    if s['symbol'] not in ('NIFTY', 'SENSEX')
+] + [
+    {'name': 'Nifty 50 Index', 'symbol': 'NIFTY50', 'exchange': 'NSE'},
+    {'name': 'Bank Nifty Index', 'symbol': 'BANKNIFTY', 'exchange': 'NSE'},
+    {'name': 'BSE Sensex Index', 'symbol': 'SENSEX', 'exchange': 'BSE'},
+]
+
+
+@app.route("/api/stocks")
+@rate_limit(max_requests=60, window=60)
+@cache_response(timeout=3600)  # Static list — cache for 1 hour
+def list_stocks():
+    """List all available stocks: NSE blue-chips + select US indices/equities"""
+    exchange_filter = request.args.get('exchange', '').upper()
+    all_stocks = NSE_STOCKS_LIST + US_STOCKS
+
+    if exchange_filter:
+        all_stocks = [s for s in all_stocks if s['exchange'] == exchange_filter]
+
+    return jsonify({
+        "stocks": all_stocks,
+        "total": len(all_stocks),
+        "exchanges": list({s['exchange'] for s in all_stocks}),
+        "note": "NSE stocks + select US indices/equities. More coming in future phases."
+    })
+
+
+@app.route("/api/news/for-tickers")
+@rate_limit(max_requests=30, window=60)
+def get_news_for_tickers():
+    """Get news filtered by one or more tickers (comma-separated symbols via ?tickers=).
+    Falls back to all news if tickers param is missing.
+    """
+    tickers_param = request.args.get('tickers', '')
+    symbols = {t.strip().upper() for t in tickers_param.split(',') if t.strip()}
+
+    try:
+        mc_news = get_moneycontrol_news()
+        et_news = get_economictimes_news()
+        all_news = mc_news + et_news
+
+        # Enhance each news item
+        enhanced = []
+        for item in all_news[:20]:
+            enhanced_item = item.copy()
+            if item.get('description'):
+                enhanced_item['summary'] = simple_summarize(item['description'], max_sentences=2)
+            else:
+                enhanced_item['summary'] = "Summary not available"
+
+            title = item.get('title') or ""
+            desc = item.get('description') or ""
+            score = analyze_sentiment(title + " " + desc)
+            enhanced_item['sentiment'] = {
+                'score': round(score, 3),
+                'label': 'positive' if score > 0.1 else 'negative' if score < -0.1 else 'neutral'
+            }
+            enhanced_item['article_id'] = str(hash(title + item.get('link', '')))
+            enhanced.append(enhanced_item)
+
+        if symbols:
+            filtered = []
+            for item in enhanced:
+                item_symbols = {
+                    (s.get('symbol') or '').upper()
+                    for s in (item.get('stocks_with_sentiment') or item.get('stocks') or [])
+                }
+                if item_symbols & symbols:
+                    filtered.append(item)
+        else:
+            filtered = enhanced
+
+        return jsonify({
+            "news": filtered,
+            "tickers": list(symbols),
+            "total_count": len(filtered),
+            "last_updated": datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error in get_news_for_tickers: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/trending")
+@rate_limit(max_requests=30, window=60)
+def get_trending():
+    """Trending stocks/news — alias for /api/stocks/trending with additional metadata"""
+    try:
+        mc_news = get_moneycontrol_news()
+        et_news = get_economictimes_news()
+        all_news = mc_news + et_news
+
+        stock_data = {}
+        for item in all_news:
+            for stock in (item.get('stocks_with_sentiment') or item.get('stocks') or []):
+                sym = stock.get('symbol')
+                if not sym:
+                    continue
+                if sym not in stock_data:
+                    stock_data[sym] = {
+                        'name': stock.get('name', sym),
+                        'symbol': sym,
+                        'mention_count': 0,
+                        'sentiments': [],
+                        'recent_news': []
+                    }
+                stock_data[sym]['mention_count'] += 1
+                if isinstance(stock.get('sentiment'), (int, float)):
+                    stock_data[sym]['sentiments'].append(stock['sentiment'])
+                if len(stock_data[sym]['recent_news']) < 3:
+                    stock_data[sym]['recent_news'].append({
+                        'title': item.get('title', ''),
+                        'source': item.get('source', ''),
+                    })
+
+        trending = []
+        for sym, data in stock_data.items():
+            avg = (sum(data['sentiments']) / len(data['sentiments'])) if data['sentiments'] else 0
+            trending.append({
+                'symbol': sym,
+                'name': data['name'],
+                'mention_count': data['mention_count'],
+                'average_sentiment': round(avg, 3),
+                'sentiment_label': 'positive' if avg > 0.1 else 'negative' if avg < -0.1 else 'neutral',
+                'trending_score': round(data['mention_count'] * (1 + abs(avg)), 2),
+                'recent_news': data['recent_news'],
+            })
+
+        trending.sort(key=lambda x: x['trending_score'], reverse=True)
+
+        return jsonify({
+            "trending_stocks": trending[:10],
+            "total_analyzed": len(trending),
+            "last_updated": datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error in get_trending: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ---- Auth Stubs (Phase 2 — not yet implemented) ----
+
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register_stub():
+    """[STUB] User registration — not implemented in Phase 1.
+    Will be wired to a real auth system (JWT/OAuth) in Phase 2."""
+    return jsonify({
+        "status": "not_implemented",
+        "message": "User authentication is planned for Phase 2. Watchlists are currently stored locally in the browser.",
+        "phase": 2
+    }), 501
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login_stub():
+    """[STUB] User login — not implemented in Phase 1."""
+    return jsonify({
+        "status": "not_implemented",
+        "message": "User authentication is planned for Phase 2.",
+        "phase": 2
+    }), 501
+
+
+# ---- Feedback Stub (Phase 1 stores locally; Phase 2 will persist to DB) ----
+
+@app.route("/api/feedback", methods=["POST"])
+@rate_limit(max_requests=10, window=60)
+def submit_feedback():
+    """Accept user feedback. Phase 1: logs to server console.
+    Phase 2 will persist to a database."""
+    try:
+        data = request.get_json(silent=True) or {}
+        logger.info(f"[Feedback] category={data.get('category')} rating={data.get('rating')} "
+                    f"subject={data.get('subject')!r} message={data.get('message', '')[:200]!r}")
+        return jsonify({
+            "status": "received",
+            "message": "Thank you for your feedback! It has been logged."
+        })
+    except Exception as e:
+        logger.error(f"Error accepting feedback: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     # Start background tasks
     start_background_tasks()
@@ -1554,3 +1761,4 @@ if __name__ == "__main__":
         if scheduler.running:
             scheduler.shutdown()
         logger.info("Scheduler stopped")
+
