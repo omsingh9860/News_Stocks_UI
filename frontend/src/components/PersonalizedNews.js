@@ -17,21 +17,24 @@ const getSentimentIcon = (sentiment) => {
   }
 };
 
-const PersonalizedNews = ({ news, watchlist, onArticleView }) => {
-  const watchlistSymbols = useMemo(
-    () => new Set(watchlist.map(s => s.symbol.toUpperCase())),
-    [watchlist]
-  );
+const PersonalizedNews = ({ news, watchlist, holdingsSymbols = [], onArticleView }) => {
+  const trackedSymbols = useMemo(() => {
+    const set = new Set(watchlist.map(s => s.symbol.toUpperCase()));
+    holdingsSymbols.forEach(sym => set.add(sym.toUpperCase()));
+    return set;
+  }, [watchlist, holdingsSymbols]);
 
   const personalizedNews = useMemo(() => {
-    if (watchlist.length === 0) return [];
+    if (trackedSymbols.size === 0) return [];
     return news.filter(article => {
       const stocksInArticle = article.stocks_with_sentiment || article.stocks || [];
-      return stocksInArticle.some(s => watchlistSymbols.has((s.symbol || '').toUpperCase()));
+      return stocksInArticle.some(s => trackedSymbols.has((s.symbol || '').toUpperCase()));
     });
-  }, [news, watchlist, watchlistSymbols]);
+  }, [news, trackedSymbols]);
 
-  if (watchlist.length === 0) {
+  const hasTrackedSymbols = watchlist.length > 0 || holdingsSymbols.length > 0;
+
+  if (!hasTrackedSymbols) {
     return (
       <section className="personalized-news-section">
         <h2 className="section-title">
@@ -40,11 +43,16 @@ const PersonalizedNews = ({ news, watchlist, onArticleView }) => {
         </h2>
         <div className="empty-state">
           <Star size={48} />
-          <p>Add stocks to your watchlist to see personalized news here.</p>
+          <p>Add stocks to your watchlist or holdings to see personalized news here.</p>
         </div>
       </section>
     );
   }
+
+  const allSymbolLabels = [
+    ...watchlist.map(s => s.symbol),
+    ...holdingsSymbols.filter(sym => !watchlist.find(w => w.symbol.toUpperCase() === sym.toUpperCase())),
+  ].join(', ');
 
   return (
     <section className="personalized-news-section">
@@ -57,22 +65,22 @@ const PersonalizedNews = ({ news, watchlist, onArticleView }) => {
           )}
         </h2>
         <p className="section-subtitle">
-          News filtered for: {watchlist.map(s => s.symbol).join(', ')}
+          News filtered for: {allSymbolLabels}
         </p>
       </div>
 
       {personalizedNews.length === 0 ? (
         <div className="empty-state">
           <AlertCircle size={48} />
-          <p>No recent news found for your watchlist stocks.</p>
-          <p className="watchlist-hint">Check back later or broaden your watchlist.</p>
+          <p>No recent news found for your tracked stocks.</p>
+          <p className="watchlist-hint">Check back later or add more stocks to your watchlist or holdings.</p>
         </div>
       ) : (
         <div className="news-list">
           {personalizedNews.map((article, idx) => {
             const articleId = article.article_id || idx;
             const relevantStocks = (article.stocks_with_sentiment || article.stocks || []).filter(
-              s => watchlistSymbols.has((s.symbol || '').toUpperCase())
+              s => trackedSymbols.has((s.symbol || '').toUpperCase())
             );
             return (
               <div

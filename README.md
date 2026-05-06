@@ -11,9 +11,10 @@ A production-ready, full-stack SaaS starter for real-time NSE & US stock news, p
 |---|---|
 | 🌐 **Market Overview** | Live NSE/BSE/NASDAQ indices, auto-refreshed every 60 s |
 | ⭐ **Watchlist** | Add/remove 40+ NSE stocks & 10 US stocks/indices; persisted in `localStorage` |
-| 📰 **Personalized News** | Auto-filtered news feed for your watchlist stocks |
+| 💼 **Holdings** | Add/edit/remove real portfolio holdings (symbol, qty, avg buy price, buy date, notes, manual current price); persisted in `localStorage` |
+| 📰 **Personalized News** | Auto-filtered news feed for your watchlist **and holdings** stocks |
 | 🔥 **Trending & Analytics** | Top-10 most-mentioned stocks by news volume + sentiment |
-| 📊 **Analytics Dashboard** | Portfolio simulation with P&L, sentiment pie/bar charts, key stats |
+| 📊 **Analytics Dashboard** | Real portfolio P&L from your holdings (total invested, current value, unrealized P&L, top gainers/losers, allocation chart); falls back gracefully when live price is unavailable with manual override |
 | 🕯️ **Candlestick Charts** | Interactive TradingView charts — click any stock or index to open |
 | 🔖 **Bookmarks** | Bookmark articles; stored in `localStorage` |
 | 🕐 **Recently Viewed** | Tracks stocks & articles you've viewed (local, no login) |
@@ -67,14 +68,16 @@ News_Stocks_UI/
         │   └── ThemeContext.js      # Dark/light theme React context
         ├── hooks/
         │   ├── useWatchlist.js      # Watchlist state → localStorage
+        │   ├── useHoldings.js       # Holdings state → localStorage
         │   ├── useRecentlyViewed.js # Recently-viewed → localStorage
         │   ├── useBookmarks.js      # News bookmarks → localStorage
         │   └── useNewsPolling.js    # Polling hook for background news refresh
         └── components/
             ├── Watchlist.js         # Watchlist UI (add/remove/search stocks)
-            ├── PersonalizedNews.js  # News filtered to watchlist stocks
+            ├── HoldingsManager.js   # Holdings CRUD form (add/edit/remove holdings with P&L)
+            ├── PersonalizedNews.js  # News filtered to watchlist + holdings stocks
             ├── TrendingSection.js   # Trending + recently viewed
-            ├── AnalyticsDashboard.js# Portfolio simulation + Recharts charts
+            ├── AnalyticsDashboard.js# Real portfolio P&L from holdings + Recharts charts
             ├── StockChart.js        # TradingView candlestick modal
             ├── SkeletonLoader.js    # Animated skeleton placeholders
             ├── ThemeToggle.js       # Sun/Moon theme toggle button
@@ -186,6 +189,7 @@ All personalization is stored in the browser — no login required.
 | Key | Contents |
 |---|---|
 | `market_watchlist_v1` | User's watchlist (symbol, name, exchange) |
+| `portfolio_holdings_v1` | User's holdings (symbol, qty, avgBuyPrice, buyDate, notes, manualCurrentPrice) |
 | `recently_viewed_v1` | Last 10 viewed stocks/articles |
 | `news_bookmarks_v1` | Bookmarked news articles (max 100) |
 | `user_feedback_v1` | Submitted feedback entries (max 50) |
@@ -238,8 +242,9 @@ npm run build
 | Phase | Status | Features |
 |---|---|---|
 | **Phase 1** | ✅ Complete | Watchlist, Personalized News, Trending, Candlestick Charts, Analytics Dashboard, Bookmarks, Dark/Light Mode, Skeleton Loaders, Feedback, Onboarding |
+| **Phase 1.5** | ✅ Complete | Real Holdings input (add/edit/remove), localStorage persistence, real portfolio P&L metrics (total invested, current value, unrealized P&L, top gainers/losers, allocation chart), manual price override, holdings-aware Personalized News |
 | **Phase 2** | 🔜 Planned | User Authentication (Google/Email), Cloud-synced Watchlists, Push Notifications |
-| **Phase 3** | 🔜 Planned | Subscription Plans, Portfolio Tracking (real data), AI Price Alerts, Team Workspaces |
+| **Phase 3** | 🔜 Planned | Subscription Plans, Live Price Integration, AI Price Alerts, Team Workspaces |
 
 ---
 
