@@ -73,7 +73,7 @@ def start_scheduler():
             func=update_all_indices,
             trigger="interval",
             minutes=60,
-            id='update_indices',
+            id='update_all_indices',
             name='Update live indices data',
             replace_existing=True,
         )
