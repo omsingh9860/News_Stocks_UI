@@ -16,7 +16,6 @@ import {
   Search,
   Globe,
   DollarSign,
-  Activity, // eslint-disable-line no-unused-vars
   X,
   MessageSquare,
   Bookmark,
@@ -66,7 +65,7 @@ const App = () => {
   // Phase 1 — Watchlist & Recently Viewed (localStorage-persisted)
   const { watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist } = useWatchlist();
   const { recentlyViewed, addRecentlyViewed } = useRecentlyViewed();
-  const { bookmarks: _bookmarks, addBookmark, removeBookmark, isBookmarked } = useBookmarks(); // eslint-disable-line no-unused-vars
+  const { addBookmark, removeBookmark, isBookmarked } = useBookmarks();
 
   // Phase 1 — navigation tabs
   const [activeNav, setActiveNav] = useState('market');

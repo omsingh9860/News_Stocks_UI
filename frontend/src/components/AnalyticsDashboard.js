@@ -15,8 +15,6 @@ const PORTFOLIO = [
   { symbol: 'SBIN',     name: 'State Bank of India',  qty: 25, buyPrice: 590,  currentPrice: 615  },
 ];
 
-// eslint-disable-next-line no-unused-vars
-const SENTIMENT_COLORS = { positive: '#10b981', negative: '#ef4444', neutral: '#6b7280' };
 const PIE_COLORS = ['#10b981', '#ef4444', '#6b7280'];
 
 const StatCard = ({ label, value, color }) => (
