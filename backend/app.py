@@ -372,7 +372,10 @@ def get_tradingview_ideas():
 
         # Find all the stock ideas and conditions
         all_ideas = soup.find_all("a", class_="title-tkslJwxl line-clamp-tkslJwxl stretched-outline-tkslJwxl")
-        all_conditions = soup.find_all("span", class_="visually-hidden-label-cbI7LT3N")
+        all_conditions = soup.find_all("span", class_="visuallyHiddenLabel-cYxls04V")
+
+        print("Ideas found:", len(all_ideas))
+        print("Conditions found:", len(all_conditions))
 
         ideas_list = []
 
