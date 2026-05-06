@@ -3,19 +3,11 @@ import {
   PieChart, Pie, Cell,
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-import { TrendingUp, TrendingDown, Newspaper, BarChart2, Briefcase } from 'lucide-react';
+import { TrendingUp, TrendingDown, Newspaper, BarChart2, Briefcase, AlertCircle } from 'lucide-react';
 import { formatPrice } from '../utils/helpers';
 
-const PORTFOLIO = [
-  { symbol: 'RELIANCE', name: 'Reliance Industries', qty: 10, buyPrice: 2450, currentPrice: 2680 },
-  { symbol: 'TCS',      name: 'Tata Consultancy',    qty: 5,  buyPrice: 3800, currentPrice: 3950 },
-  { symbol: 'INFY',     name: 'Infosys',              qty: 15, buyPrice: 1480, currentPrice: 1520 },
-  { symbol: 'HDFCBANK', name: 'HDFC Bank',            qty: 8,  buyPrice: 1620, currentPrice: 1700 },
-  { symbol: 'WIPRO',    name: 'Wipro',                qty: 20, buyPrice: 470,  currentPrice: 490  },
-  { symbol: 'SBIN',     name: 'State Bank of India',  qty: 25, buyPrice: 590,  currentPrice: 615  },
-];
-
 const PIE_COLORS = ['#10b981', '#ef4444', '#6b7280'];
+const ALLOC_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#14b8a6', '#f97316'];
 
 const StatCard = ({ label, value, color }) => (
   <div className="stat-card">
@@ -24,7 +16,7 @@ const StatCard = ({ label, value, color }) => (
   </div>
 );
 
-const AnalyticsDashboard = ({ news = [], tradingIdeas = {}, recentlyViewed = [] }) => {
+const AnalyticsDashboard = ({ news = [], tradingIdeas = {}, recentlyViewed = [], holdings = [] }) => {
   // ── Sentiment breakdown ──────────────────────────────────────────────────
   const sentimentData = useMemo(() => {
     const counts = { positive: 0, negative: 0, neutral: 0 };
@@ -50,25 +42,40 @@ const AnalyticsDashboard = ({ news = [], tradingIdeas = {}, recentlyViewed = [] 
     return (sum / scored.length).toFixed(2);
   }, [news]);
 
-  // ── Portfolio calculations ───────────────────────────────────────────────
-  const portfolioRows = PORTFOLIO.map(s => {
-    const investedValue = s.qty * s.buyPrice;
-    const currentValue  = s.qty * s.currentPrice;
-    const pnl           = currentValue - investedValue;
-    const pnlPct        = ((pnl / investedValue) * 100).toFixed(2);
-    return { ...s, investedValue, currentValue, pnl, pnlPct };
-  });
+  // ── Portfolio calculations (real holdings) ───────────────────────────────
+  const portfolioRows = useMemo(() => holdings.map(h => {
+    const investedValue = h.qty * h.buyPrice;
+    const currentPrice  = h.manualCurrentPrice ?? null;
+    const hasPrice      = currentPrice !== null;
+    const currentValue  = hasPrice ? h.qty * currentPrice : null;
+    const pnl           = hasPrice ? currentValue - investedValue : null;
+    const pnlPct        = hasPrice ? ((pnl / investedValue) * 100).toFixed(2) : null;
+    return { ...h, investedValue, currentValue, pnl, pnlPct, hasPrice };
+  }), [holdings]);
+
+  const pricedRows = portfolioRows.filter(r => r.hasPrice);
 
   const totalInvested = portfolioRows.reduce((s, r) => s + r.investedValue, 0);
-  const totalCurrent  = portfolioRows.reduce((s, r) => s + r.currentValue,  0);
-  const totalPnL      = totalCurrent - totalInvested;
-  const totalPnLPct   = ((totalPnL / totalInvested) * 100).toFixed(2);
+  const totalCurrent  = pricedRows.reduce((s, r) => s + r.currentValue, 0);
+  const totalPnL      = pricedRows.reduce((s, r) => s + r.pnl, 0);
+  const totalPnLPct   = totalInvested > 0 ? ((totalPnL / totalInvested) * 100).toFixed(2) : '0.00';
 
-  const portfolioChartData = portfolioRows.map(r => ({
+  const portfolioChartData = pricedRows.map(r => ({
     symbol: r.symbol,
     'Current Value': Math.round(r.currentValue),
     'P&L': Math.round(r.pnl),
   }));
+
+  // Allocation by invested value
+  const allocationData = portfolioRows.map(r => ({
+    name: r.symbol,
+    value: Math.round(r.investedValue),
+  }));
+
+  // Top gainers / losers (only rows with price)
+  const sortedByPnlPct = [...pricedRows].sort((a, b) => parseFloat(b.pnlPct) - parseFloat(a.pnlPct));
+  const topGainers = sortedByPnlPct.filter(r => parseFloat(r.pnlPct) >= 0).slice(0, 3);
+  const topLosers  = sortedByPnlPct.filter(r => parseFloat(r.pnlPct) < 0).slice(-3).reverse();
 
   return (
     <div className="analytics-section">
@@ -131,82 +138,177 @@ const AnalyticsDashboard = ({ news = [], tradingIdeas = {}, recentlyViewed = [] 
           </ResponsiveContainer>
         </div>
 
-        {/* Portfolio BarChart */}
-        <div className="analytics-card">
-          <div className="analytics-card-title">
-            <Briefcase size={16} /> Portfolio – Current Value vs P&amp;L
+        {/* Portfolio Allocation PieChart */}
+        {allocationData.length > 0 && (
+          <div className="analytics-card">
+            <div className="analytics-card-title">
+              <Briefcase size={16} /> Portfolio Allocation (by invested)
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={allocationData}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={80}
+                  dataKey="value"
+                  label={({ name }) => name}
+                >
+                  {allocationData.map((entry, i) => (
+                    <Cell key={i} fill={ALLOC_COLORS[i % ALLOC_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v) => `₹${formatPrice(v)}`} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={portfolioChartData}>
-              <XAxis dataKey="symbol" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => `₹${formatPrice(v)}`} />
-              <Legend />
-              <Bar dataKey="Current Value" fill="#3b82f6" />
-              <Bar dataKey="P&L" fill="#10b981" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        )}
+
+        {/* Portfolio P&L BarChart */}
+        {portfolioChartData.length > 0 && (
+          <div className="analytics-card">
+            <div className="analytics-card-title">
+              <Briefcase size={16} /> Portfolio – Current Value vs P&amp;L
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={portfolioChartData}>
+                <XAxis dataKey="symbol" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v) => `₹${formatPrice(v)}`} />
+                <Legend />
+                <Bar dataKey="Current Value" fill="#3b82f6" />
+                <Bar dataKey="P&L" fill="#10b981" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </div>
+
+      {/* ── Top Gainers / Losers ─────────────────────────────────────────── */}
+      {(topGainers.length > 0 || topLosers.length > 0) && (
+        <div className="analytics-grid">
+          {topGainers.length > 0 && (
+            <div className="analytics-card">
+              <div className="analytics-card-title" style={{ color: '#10b981' }}>
+                <TrendingUp size={16} /> Top Gainers
+              </div>
+              <div className="gainer-loser-list">
+                {topGainers.map(r => (
+                  <div key={r.symbol} className="gl-row">
+                    <strong className="gl-symbol">{r.symbol}</strong>
+                    <span className="gl-pnl" style={{ color: '#10b981' }}>
+                      +₹{formatPrice(r.pnl)} ({r.pnlPct}%)
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {topLosers.length > 0 && (
+            <div className="analytics-card">
+              <div className="analytics-card-title" style={{ color: '#ef4444' }}>
+                <TrendingDown size={16} /> Top Losers
+              </div>
+              <div className="gainer-loser-list">
+                {topLosers.map(r => (
+                  <div key={r.symbol} className="gl-row">
+                    <strong className="gl-symbol">{r.symbol}</strong>
+                    <span className="gl-pnl" style={{ color: '#ef4444' }}>
+                      ₹{formatPrice(r.pnl)} ({r.pnlPct}%)
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Portfolio Table ───────────────────────────────────────────────── */}
       <div className="analytics-card">
         <div className="analytics-card-title">
-          <Briefcase size={16} /> Mock Portfolio Simulation
+          <Briefcase size={16} /> Portfolio Summary
         </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="portfolio-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Name</th>
-                <th>Qty</th>
-                <th>Buy Price</th>
-                <th>Current</th>
-                <th>Invested</th>
-                <th>Current Value</th>
-                <th>P&amp;L</th>
-                <th>%</th>
-              </tr>
-            </thead>
-            <tbody>
-              {portfolioRows.map(r => (
-                <tr key={r.symbol}>
-                  <td><strong>{r.symbol}</strong></td>
-                  <td>{r.name}</td>
-                  <td>{r.qty}</td>
-                  <td>₹{formatPrice(r.buyPrice)}</td>
-                  <td>₹{formatPrice(r.currentPrice)}</td>
-                  <td>₹{formatPrice(r.investedValue)}</td>
-                  <td>₹{formatPrice(r.currentValue)}</td>
-                  <td style={{ color: r.pnl >= 0 ? '#10b981' : '#ef4444' }}>
-                    {r.pnl >= 0 ? '+' : ''}₹{formatPrice(r.pnl)}
-                  </td>
-                  <td style={{ color: r.pnl >= 0 ? '#10b981' : '#ef4444' }}>
-                    {r.pnl >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                    {r.pnlPct}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="portfolio-summary">
-          <div className="portfolio-stat">
-            <span className="portfolio-stat-label">Total Invested</span>
-            <span className="portfolio-stat-value">₹{formatPrice(totalInvested)}</span>
+
+        {portfolioRows.length === 0 ? (
+          <div className="empty-state" style={{ padding: '2rem 0' }}>
+            <Briefcase size={36} />
+            <p>No holdings yet. Go to the <strong>Holdings</strong> tab to add your portfolio.</p>
           </div>
-          <div className="portfolio-stat">
-            <span className="portfolio-stat-label">Current Value</span>
-            <span className="portfolio-stat-value">₹{formatPrice(totalCurrent)}</span>
-          </div>
-          <div className="portfolio-stat">
-            <span className="portfolio-stat-label">Total P&amp;L</span>
-            <span className="portfolio-stat-value" style={{ color: totalPnL >= 0 ? '#10b981' : '#ef4444' }}>
-              {totalPnL >= 0 ? '+' : ''}₹{formatPrice(totalPnL)} ({totalPnLPct}%)
-            </span>
-          </div>
-        </div>
+        ) : (
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="portfolio-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Qty</th>
+                    <th>Buy Price</th>
+                    <th>Current</th>
+                    <th>Invested</th>
+                    <th>Current Value</th>
+                    <th>P&amp;L</th>
+                    <th>%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {portfolioRows.map(r => (
+                    <tr key={r.symbol}>
+                      <td><strong>{r.symbol}</strong></td>
+                      <td>{r.qty}</td>
+                      <td>₹{formatPrice(r.buyPrice)}</td>
+                      <td>
+                        {r.hasPrice
+                          ? `₹${formatPrice(r.manualCurrentPrice)}`
+                          : <span className="price-na"><AlertCircle size={13} /> N/A</span>}
+                      </td>
+                      <td>₹{formatPrice(r.investedValue)}</td>
+                      <td>{r.hasPrice ? `₹${formatPrice(r.currentValue)}` : '—'}</td>
+                      <td style={{ color: r.pnl != null ? (r.pnl >= 0 ? '#10b981' : '#ef4444') : undefined }}>
+                        {r.pnl != null ? `${r.pnl >= 0 ? '+' : ''}₹${formatPrice(r.pnl)}` : '—'}
+                      </td>
+                      <td style={{ color: r.pnlPct != null ? (parseFloat(r.pnlPct) >= 0 ? '#10b981' : '#ef4444') : undefined }}>
+                        {r.pnlPct != null
+                          ? <>{parseFloat(r.pnlPct) >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />} {r.pnlPct}%</>
+                          : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="portfolio-summary">
+              <div className="portfolio-stat">
+                <span className="portfolio-stat-label">Total Invested</span>
+                <span className="portfolio-stat-value">₹{formatPrice(totalInvested)}</span>
+              </div>
+              {pricedRows.length > 0 && (
+                <>
+                  <div className="portfolio-stat">
+                    <span className="portfolio-stat-label">Current Value</span>
+                    <span className="portfolio-stat-value">₹{formatPrice(totalCurrent)}</span>
+                  </div>
+                  <div className="portfolio-stat">
+                    <span className="portfolio-stat-label">Unrealized P&amp;L</span>
+                    <span className="portfolio-stat-value" style={{ color: totalPnL >= 0 ? '#10b981' : '#ef4444' }}>
+                      {totalPnL >= 0 ? '+' : ''}₹{formatPrice(totalPnL)} ({totalPnLPct}%)
+                    </span>
+                  </div>
+                </>
+              )}
+              {pricedRows.length < portfolioRows.length && (
+                <div className="portfolio-stat">
+                  <span className="portfolio-stat-label" style={{ color: '#f59e0b' }}>
+                    <AlertCircle size={14} style={{ verticalAlign: 'middle' }} />
+                    {' '}{portfolioRows.length - pricedRows.length} holding(s) missing current price
+                  </span>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

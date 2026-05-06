@@ -23,12 +23,14 @@ import "./App.css";
 import { useWatchlist } from './hooks/useWatchlist';
 import { useRecentlyViewed } from './hooks/useRecentlyViewed';
 import { useBookmarks } from './hooks/useBookmarks';
+import { useHoldings } from './hooks/useHoldings';
 import Watchlist from './components/Watchlist';
 import PersonalizedNews from './components/PersonalizedNews';
 import TrendingSection from './components/TrendingSection';
 import StockChart from './components/StockChart';
 import FeedbackForm from './components/FeedbackForm';
 import OnboardingModal, { shouldShowOnboarding } from './components/OnboardingModal';
+import HoldingsManager from './components/HoldingsManager';
 import { fetchIndices as apiFetchIndices, fetchNewsWithIdeas } from './services/api';
 import { formatPrice, formatTime, getSentimentColor, getSentimentIcon, getSignalColor } from './utils/helpers';
 import ThemeToggle from './components/ThemeToggle';
@@ -65,6 +67,7 @@ const App = () => {
   const { watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist } = useWatchlist();
   const { recentlyViewed, addRecentlyViewed } = useRecentlyViewed();
   const { addBookmark, removeBookmark, isBookmarked } = useBookmarks();
+  const { holdings, addHolding, updateHolding, removeHolding, updateCurrentPrice } = useHoldings();
 
   // Phase 1 — navigation tabs
   const [activeNav, setActiveNav] = useState('market');
@@ -229,6 +232,7 @@ const App = () => {
   const NAV_TABS = [
     { id: 'market', label: 'Market Overview', icon: '🌐' },
     { id: 'watchlist', label: `Watchlist${watchlist.length > 0 ? ` (${watchlist.length})` : ''}`, icon: '⭐' },
+    { id: 'holdings', label: `Holdings${holdings.length > 0 ? ` (${holdings.length})` : ''}`, icon: '💼' },
     { id: 'personalized', label: 'Personalized News', icon: '📰' },
     { id: 'trending', label: 'Trending & Analytics', icon: '🔥' },
     { id: 'analytics', label: 'Analytics', icon: '📊' },
@@ -674,11 +678,23 @@ const App = () => {
         />
       )}
 
+      {/* ===== HOLDINGS TAB ===== */}
+      {activeNav === 'holdings' && (
+        <HoldingsManager
+          holdings={holdings}
+          onAdd={addHolding}
+          onUpdate={updateHolding}
+          onRemove={removeHolding}
+          onUpdatePrice={updateCurrentPrice}
+        />
+      )}
+
       {/* ===== PERSONALIZED NEWS TAB ===== */}
       {activeNav === 'personalized' && (
         <PersonalizedNews
           news={news}
           watchlist={watchlist}
+          holdingsSymbols={holdings.map(h => h.symbol)}
           onArticleView={handleArticleView}
         />
       )}
@@ -698,6 +714,7 @@ const App = () => {
           news={news}
           tradingIdeas={tradingIdeas}
           recentlyViewed={recentlyViewed}
+          holdings={holdings}
         />
       )}
 
