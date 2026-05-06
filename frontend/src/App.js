@@ -3,7 +3,6 @@ import {
   ExternalLink, 
   TrendingUp, 
   TrendingDown, 
-  Minus, 
   Clock, 
   User, 
   Tag, 
@@ -31,7 +30,7 @@ import StockChart from './components/StockChart';
 import FeedbackForm from './components/FeedbackForm';
 import OnboardingModal, { shouldShowOnboarding } from './components/OnboardingModal';
 import { fetchIndices as apiFetchIndices, fetchNewsWithIdeas } from './services/api';
-import { formatPrice, formatTime } from './utils/helpers';
+import { formatPrice, formatTime, getSentimentColor, getSentimentIcon, getSignalColor } from './utils/helpers';
 import ThemeToggle from './components/ThemeToggle';
 import { SkeletonIndexCard, SkeletonNewsCard } from './components/SkeletonLoader';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
@@ -209,30 +208,6 @@ const App = () => {
       ...prev,
       [articleId]: !prev[articleId]
     }));
-  };
-
-  const getSentimentColor = (sentiment) => {
-    switch (sentiment) {
-      case 'positive': return '#10b981';
-      case 'negative': return '#ef4444';
-      default: return '#6b7280';
-    }
-  };
-
-  const getSentimentIcon = (sentiment) => {
-    switch (sentiment) {
-      case 'positive': return <TrendingUp size={16} />;
-      case 'negative': return <TrendingDown size={16} />;
-      default: return <Minus size={16} />;
-    }
-  };
-
-  const getSignalColor = (signal) => {
-    switch (signal?.toUpperCase()) {
-      case 'BUY': return '#10b981';
-      case 'SELL': return '#ef4444';
-      default: return '#3b82f6';
-    }
   };
 
   // Filtered data
