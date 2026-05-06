@@ -16,19 +16,26 @@ import {
   Search,
   Globe,
   DollarSign,
-  Activity,
+  Activity, // eslint-disable-line no-unused-vars
   X,
   MessageSquare,
+  Bookmark,
 } from 'lucide-react';
 import "./App.css";
 import { useWatchlist } from './hooks/useWatchlist';
 import { useRecentlyViewed } from './hooks/useRecentlyViewed';
+import { useBookmarks } from './hooks/useBookmarks';
 import Watchlist from './components/Watchlist';
 import PersonalizedNews from './components/PersonalizedNews';
 import TrendingSection from './components/TrendingSection';
 import StockChart from './components/StockChart';
 import FeedbackForm from './components/FeedbackForm';
 import OnboardingModal, { shouldShowOnboarding } from './components/OnboardingModal';
+import { fetchIndices as apiFetchIndices, fetchNewsWithIdeas } from './services/api';
+import { formatPrice, formatTime } from './utils/helpers';
+import ThemeToggle from './components/ThemeToggle';
+import { SkeletonIndexCard, SkeletonNewsCard } from './components/SkeletonLoader';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
 
 // Simple Google Analytics event tracker
 const trackEvent = (eventName, params = {}) => {
@@ -59,6 +66,7 @@ const App = () => {
   // Phase 1 — Watchlist & Recently Viewed (localStorage-persisted)
   const { watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist } = useWatchlist();
   const { recentlyViewed, addRecentlyViewed } = useRecentlyViewed();
+  const { bookmarks: _bookmarks, addBookmark, removeBookmark, isBookmarked } = useBookmarks(); // eslint-disable-line no-unused-vars
 
   // Phase 1 — navigation tabs
   const [activeNav, setActiveNav] = useState('market');
@@ -98,10 +106,7 @@ const App = () => {
   // Fetch functions
   const fetchIndices = useCallback(async () => {
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/indices/live`);
-      if (!response.ok) throw new Error('Failed to fetch indices');
-      const data = await response.json();
-      
+      const data = await apiFetchIndices();
       const indicesArray = Object.entries(data.indices).map(([key, value]) => ({
         id: key,
         ...value
@@ -115,40 +120,22 @@ const App = () => {
 
   const fetchNewsAndIdeas = useCallback(async () => {
     try {
-      // Try the combined endpoint first
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/news-with-ideas`);
-      if (response.ok) {
-        const data = await response.json();
-        setNews(data.news || []);
-        setTradingIdeas({
-          ideas: data.tradingview_ideas || [],
-          grouped_ideas: data.grouped_ideas || {
-            buy_signals: [],
-            sell_signals: [],
-            educational: []
-          },
-          summary: data.summary || {
-            total_ideas: 0,
-            buy_signals_count: 0,
-            sell_signals_count: 0,
-            educational_count: 0
-          }
-        });
-      } else {
-        // Fallback: fetch news and ideas separately
-        const [newsRes, ideasRes] = await Promise.all([
-          fetch(`${process.env.REACT_APP_API_URL}/api/news/summary`),
-          fetch(`${process.env.REACT_APP_API_URL}/api/tradingview/ideas/enhanced`),
-        ]);
-        if (newsRes.ok) {
-          const newsData = await newsRes.json();
-          setNews(newsData.news || []);
+      const data = await fetchNewsWithIdeas();
+      setNews(data.news || []);
+      setTradingIdeas({
+        ideas: data.tradingview_ideas || [],
+        grouped_ideas: data.grouped_ideas || {
+          buy_signals: [],
+          sell_signals: [],
+          educational: []
+        },
+        summary: data.summary || {
+          total_ideas: 0,
+          buy_signals_count: 0,
+          sell_signals_count: 0,
+          educational_count: 0
         }
-        if (ideasRes.ok) {
-          const ideasData = await ideasRes.json();
-          setTradingIdeas(prev => ({ ...prev, ideas: ideasData.ideas || [] }));
-        }
-      }
+      });
     } catch (err) {
       console.error('Error fetching news and ideas:', err);
       setError(prev => ({ ...prev, newsIdeas: err.message }));
@@ -205,8 +192,7 @@ const App = () => {
   };
 
   // Utility functions
-  const addNotification = (message, type = 'info') => {
-    const notification = {
+  const addNotification = (message, type = 'info') => {    const notification = {
       id: Date.now(),
       message,
       type,
@@ -250,21 +236,6 @@ const App = () => {
     }
   };
 
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('en-IN', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(price);
-  };
-
-  const formatTime = (date) => {
-    return new Intl.DateTimeFormat('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    }).format(date);
-  };
-
   // Filtered data
   const filteredNews = news.filter(article => {
     const matchesSearch = article.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -279,23 +250,13 @@ const App = () => {
     return idea.signal_label?.toLowerCase().includes(selectedTab.toLowerCase());
   });
 
-  if (loading) {
-    return (
-      <div className="loading-container">
-        <div className="loading-spinner">
-          <Activity size={48} />
-          <p>Loading market data...</p>
-        </div>
-      </div>
-    );
-  }
-
   // Nav tab definitions
   const NAV_TABS = [
     { id: 'market', label: 'Market Overview', icon: '🌐' },
     { id: 'watchlist', label: `Watchlist${watchlist.length > 0 ? ` (${watchlist.length})` : ''}`, icon: '⭐' },
     { id: 'personalized', label: 'Personalized News', icon: '📰' },
     { id: 'trending', label: 'Trending & Analytics', icon: '🔥' },
+    { id: 'analytics', label: 'Analytics', icon: '📊' },
   ];
 
   return (
@@ -365,6 +326,7 @@ const App = () => {
                   <MessageSquare size={16} />
                   Feedback
                 </button>
+                <ThemeToggle />
               </div>
             </div>
           </div>
@@ -398,7 +360,10 @@ const App = () => {
               Live Market Indices
             </h2>
             <div className="indices-grid">
-              {indices.map((index) => (
+              {loading ? (
+                [1,2,3,4].map(i => <SkeletonIndexCard key={i} />)
+              ) : (
+                indices.map((index) => (
                 <div
                   key={index.id}
                   className="index-card"
@@ -428,7 +393,8 @@ const App = () => {
                   </div>
                   <div className="index-chart-hint">📊 Click to view chart</div>
                 </div>
-              ))}
+              ))
+              )}
             </div>
           </section>
 
@@ -478,7 +444,9 @@ const App = () => {
             )}
 
             <div className="news-list">
-              {filteredNews.length === 0 ? (
+              {loading ? (
+                [1,2,3].map(i => <SkeletonNewsCard key={i} />)
+              ) : filteredNews.length === 0 ? (
                 <div className="empty-state">
                   <AlertCircle size={48} />
                   <p>No news articles found matching your criteria.</p>
@@ -588,6 +556,18 @@ const App = () => {
                         >
                           <Eye size={16} />
                           {expandedArticles[articleId] ? 'Hide Details' : 'Show Details'}
+                        </button>
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            isBookmarked(articleId)
+                              ? removeBookmark(articleId)
+                              : addBookmark({ id: articleId, title: article.title, link: article.link, source: article.source, publishedAt: article.publishedAt, sentiment: article.sentiment });
+                          }}
+                          className={`bookmark-btn${isBookmarked(articleId) ? ' bookmarked' : ''}`}
+                          title={isBookmarked(articleId) ? 'Remove bookmark' : 'Bookmark article'}
+                        >
+                          <Bookmark size={16} fill={isBookmarked(articleId) ? 'currentColor' : 'none'} />
                         </button>
                         <a
                           href={article.link}
@@ -734,6 +714,15 @@ const App = () => {
           news={news}
           recentlyViewed={recentlyViewed}
           onSelectStock={handleSelectStock}
+        />
+      )}
+
+      {/* ===== ANALYTICS DASHBOARD TAB ===== */}
+      {activeNav === 'analytics' && (
+        <AnalyticsDashboard
+          news={news}
+          tradingIdeas={tradingIdeas}
+          recentlyViewed={recentlyViewed}
         />
       )}
 
